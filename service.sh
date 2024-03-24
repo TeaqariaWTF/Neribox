@@ -1,5 +1,5 @@
 #!/system/bin/sh
-case $(su -v | awk -F : '{print $2}') in
+case $(su -v 2>/dev/null| awk -F : '{print $2}') in
     MAGISKSU)
     SU_TYPE=MagiskSU
     SU_VERSION=$(su -V)
@@ -9,6 +9,11 @@ case $(su -v | awk -F : '{print $2}') in
     SU_TYPE=KernelSU
     SU_VERSION=$(su -V)
     BUSYBOX_PATH=/data/adb/ksu/bin/busybox
+    ;;
+    *)
+    SU_TYPE=Apatch
+    SU_VERSION=$(/data/adb/ap/bin/apd -V | awk '{print $2}' | awk -F - '{print $1}')
+    BUSYBOX_PATH=/data/adb/ap/bin/busybox
     ;;
 esac
 

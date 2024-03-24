@@ -1,5 +1,5 @@
 #!/system/bin/sh
-case $(su -v | awk -F : '{print $2}') in
+case $(su -v 2>/dev/null| awk -F : '{print $2}') in
     MAGISKSU)
     SU_TYPE=MagiskSU
     SU_VERSION=$(su -V)
@@ -10,9 +10,21 @@ case $(su -v | awk -F : '{print $2}') in
     SU_VERSION=$(su -V)
     BUSYBOX_PATH=/data/adb/ksu/bin/busybox
     ;;
+    *)
+    SU_TYPE=Apatch
+    SU_VERSION=$(/data/adb/ap/bin/apd -V | awk '{print $2}' | awk -F - '{print $1}')
+    BUSYBOX_PATH=/data/adb/ap/bin/busybox
+    ;;
 esac
 
-SU="su -M -c"
+case $SU_TYPE in
+    MAGISKSU|KernelSU)
+    SU="su -M -c"
+    ;;
+    Apatch)
+    SU="nsenter -t 1 -m --"
+    ;;
+esac
 
 NERIBOXDIR="/data/adb/Neribox"
 MODDIR="$($BUSYBOX_PATH dirname "$(readlink -f "$0")")"
@@ -24,7 +36,6 @@ CER_DIR="$ETC_DIR/certificate"
 PATH=$PATH:$EXE_DIR
 ALIST_PATH="$EXE_DIR/alist"
 ARIA2_PATH="$EXE_DIR/aria2c"
-LIGHTTPD_PATH="$EXE_DIR/lighttpd"
 RCLONE_PATH="$EXE_DIR/rclone"
 FRPC_PATH="$EXE_DIR/frpc"
 SQLITE_PATH="$EXE_DIR/sqlite3"
@@ -36,15 +47,14 @@ LSOF_PATH="$EXE_DIR/lsof"
 CONFIG_PATH="$NERIBOXDIR/config.ini"
 ALIST_CONFIG_PATH="$ETC_DIR/config.json"
 ARIA2_CONFIG_PATH="$ETC_DIR/aria2c.conf"
-LIGHTTPD_CONFIG_PATH="$ETC_DIR/lighttpd.conf"
 RCLONE_CONFIG_PATH="$ETC_DIR/.rclone.conf"
 
 UPDATEDIR="$NERIBOXDIR/update-cache"
 
 id=Neribox
 name=Neribox
-version=2.7
-versionCode=20231109
+version=2.8
+versionCode=20240220
 author=风又音理Neri
 
 function LANG () {
@@ -73,21 +83,25 @@ function GETARCH () {
     ALIST_ARCH=aarch64
     RCLONE_ARCH=armv8a
     FRPC_ARCH=arm64
+    JQ_ARCH=arm64
     ;;
     armeabi-v7a)
     ALIST_ARCH=arm
     RCLONE_ARCH=armv7a
     FRPC_ARCH=arm
+    JQ_ARCH=armhf
     ;;
     x86_64)
     ALIST_ARCH=x86_64
     RCLONE_ARCH=x64
     FRPC_ARCH=amd64
+    JQ_ARCH=amd64
     ;;
     x86)
     ALIST_ARCH=i686
     RCLONE_ARCH=x86
     FRPC_ARCH=386
+    JQ_ARCH=i386
     ;;
     esac
 }
@@ -120,9 +134,6 @@ function STATUS () {
         ARIA2)
         local PID="$($BUSYBOX_PATH ps | grep "$ARIA2_PATH --conf-path=$ARIA2_CONFIG_PATH" | grep -v "grep" | $BUSYBOX_PATH awk '{print $1}')"
         ;;
-        LIGHTTPD)
-        local PID="$($BUSYBOX_PATH ps | grep "$LIGHTTPD_PATH -f $LIGHTTPD_CONFIG_PATH" | grep -v "grep" | $BUSYBOX_PATH awk '{print $1}')"
-        ;;
         RCLONE)
         local PID="$($BUSYBOX_PATH ps | grep "$RCLONE_PATH mount" | grep -v "grep" | $BUSYBOX_PATH awk '{print $1}')"
         ;;
@@ -144,6 +155,9 @@ function STATUS () {
         LSOF)
         local PID="$($BUSYBOX_PATH ps | grep $LSOF_PATH | grep -v -e "grep" | $BUSYBOX_PATH awk '{print $1}')"
         ;;
+        HTTPD)
+        local PID="$($BUSYBOX_PATH ps | grep "$BUSYBOX_PATH httpd" | grep -v -e "grep" | $BUSYBOX_PATH awk '{print $1}')"
+        ;;
         esac
         if [ ! "$2" = "PID" ];then
 		    if [ -z "$PID" ];then
@@ -163,8 +177,8 @@ function STATUS () {
         ALIST)
         local PORT="$($LSOF_PATH -c alist -P -O -n | grep LISTEN | $BUSYBOX_PATH awk '{print $9}' | $BUSYBOX_PATH awk -F : '{print $2}' | $BUSYBOX_PATH sort -u)"
         ;;
-        LIGHTTPD)
-        local PORT="$($LSOF_PATH -c lighttpd -P -O -n | grep LISTEN | $BUSYBOX_PATH awk '{print $9}' | $BUSYBOX_PATH awk -F : '{print $2}' | $BUSYBOX_PATH sort -u )"
+        HTTPD)
+        local PORT="$($LSOF_PATH -c busybox -P -O -n | grep LISTEN | $BUSYBOX_PATH awk '{print $9}' | $BUSYBOX_PATH awk -F : '{print $2}' | $BUSYBOX_PATH sort -u)"
         ;;
         esac
         if [ ! "$2" = "PORT" ];then
@@ -187,9 +201,6 @@ function STATUS () {
         ;;
         ARIA2)
         local VERSION=$($ARIA2_PATH -v | $BUSYBOX_PATH egrep '^aria2 version' | $BUSYBOX_PATH awk '{print $3}' )
-        ;;
-        LIGHTTPD)
-        local VERSION=$($LIGHTTPD_PATH -v | $BUSYBOX_PATH egrep '^lighttpd' | $BUSYBOX_PATH awk '{print $1}' | $BUSYBOX_PATH sed s/[a-zA-Z/]//g )
         ;;
         RCLONE)
         local VERSION=$($RCLONE_PATH version | $BUSYBOX_PATH egrep '^rclone' | $BUSYBOX_PATH awk '{print $2}' | $BUSYBOX_PATH sed s/v//g )
@@ -274,7 +285,7 @@ function STATUS () {
                 ;;
                 WEBUI)
                 if [ "$program" = "ARIA2" ];then
-                eval "WEBUI=$(PORT LIGHTTPD PORT &)"
+                eval "$(PORT HTTPD &)"
                 fi
                 shift
                 ;;
@@ -322,7 +333,6 @@ function ALIST () {
     if [ ! "$ALIST_PID" = "✘" ];then
         kill -9 $ALIST_PID
     fi
-        LIGHTTPD STOP &
     ;;
     UPDATE)
     function DOWNLOAD () {
@@ -362,13 +372,16 @@ function ARIA2 () {
     START)
     STATUS ARIA2[PID]
     if [ "$ARIA2_PID" = "✘" ];then
-        local ARIA2_HTTPS="$(CONFIG $CONFIG_PATH ARIA2_HTTPS)"
-        if [ "$ARIA2_HTTPS" = true ];then
+        if [ "(CONFIG $CONFIG_PATH ARIA2_SSL)" = true ];then
         local PARM="--rpc-secure=true --rpc-certificate=$CER_DIR/SERVER.pem --rpc-private-key=$CER_DIR/SERVER-PRIVATE.key"
         fi
         $ARIA2_PATH --conf-path=$ARIA2_CONFIG_PATH $PARM -D
-        if [ "$(CONFIG $CONFIG_PATH ARIANG_WEBUI)" = "true" ];then
-            LIGHTTPD START &
+        local ARIANG_PORT="$(CONFIG $CONFIG_PATH ARIANG_PORT)"
+        if [ ! "$ARIANG_PORT" -gt "-1" -o ! "$ARIANG_PORT" -lt "65536" ];then
+        local ARIANG_PORT=-1
+        fi
+        if [ ! "$ARIANG_PORT" = "-1" ];then
+            HTTPD START $ARIANG_PORT &
         fi
     fi
     ;;
@@ -377,7 +390,7 @@ function ARIA2 () {
     if [ ! "$ARIA2_PID" = "✘" ];then
         kill -9 $ARIA2_PID
     fi
-        LIGHTTPD STOP &
+        HTTPD STOP &
     ;;
     UPDATE)
     function DOWNLOAD () {
@@ -409,18 +422,18 @@ function ARIA2 () {
     esac
 }
 
-function LIGHTTPD () {
+function HTTPD () {
     case $1 in
     START)
-    STATUS LIGHTTPD[PID]
-    if [ "$LIGHTTPD_PID" = "✘" ];then
-        $LIGHTTPD_PATH -f $LIGHTTPD_CONFIG_PATH
+    STATUS HTTPD[PID]
+    if [ "$HTTPD_PID" = "✘" ];then
+        $BUSYBOX_PATH httpd -p 2000 -h $NERIBOXDIR/sysroot/www
     fi
     ;;
     STOP)
-    STATUS LIGHTTPD[PID]
-    if [ ! "$LIGHTTPD_PID" = "✘" ];then
-        kill -9 $LIGHTTPD_PID
+    STATUS HTTPD[PID]
+    if [ ! "$HTTPD_PID" = "✘" ];then
+        kill -9 ${HTTPD_PID[@]}
     fi
     ;;
     esac
@@ -429,6 +442,9 @@ function LIGHTTPD () {
 function RCLONE () {
     case $1 in
     MOUNT)
+    if [ -z "$MOUNTPATH" ];then
+        local MOUNTPATH="$(CONFIG $CONFIG_PATH MOUNTPATH)"
+    fi
     if [ -z "$MOUNTDIR" ];then
         local MOUNTDIR="$(CONFIG $CONFIG_PATH MOUNTDIR)"
     fi
@@ -459,14 +475,14 @@ function RCLONE () {
     fi
     if [ -z "$REMOTE" -a ! "$ALIST_PID" = "✘" ] || [ -n "$REMOTE" ];then
         if [ -z "$REMOTE" ];then
-        mkdir -p $NERIBOXDIR/Cloud/.AList
+        mkdir -p $MOUNTPATH/Cloud/.AList
         elif [ -n "$REMOTE" ];then
-        mkdir -p $NERIBOXDIR/Cloud/$REMOTE
+        mkdir -p $MOUNTPATH/Cloud/$REMOTE
         fi
         mkdir -p $NERIBOXDIR/temp $NERIBOXDIR/temp/cache-backend /data/media/0/$MOUNTDIR
-        touch $NERIBOXDIR/Cloud/.nomedia
-        chown root:sdcard_rw $NERIBOXDIR/Cloud/.nomedia
-        chmod 0644 $NERIBOXDIR/Cloud/.nomedia
+        touch $MOUNTPATH/Cloud/.nomedia
+        chown root:sdcard_rw $MOUNTPATH/Cloud/.nomedia
+        chmod 0644 $MOUNTPATH/Cloud/.nomedia
         chown root:sdcard_rw "$NERIBOXDIR"/temp
         chmod 0775 $NERIBOXDIR/temp
         chown root:sdcard_rw $NERIBOXDIR/temp/cache-backend
@@ -483,9 +499,9 @@ function RCLONE () {
         fi
 
         if [ -z "$REMOTE" ];then
-        $SU nice -n 19 ionice -c 2 -n 7 $RCLONE_PATH mount "AList:"$CLOUDDIR"" "$NERIBOXDIR/Cloud/.AList" --config "$RCLONE_CONFIG_PATH" --log-file "$NERIBOXDIR/log.txt" --cache-dir "$NERIBOXDIR/temp" --cache-chunk-path "$NERIBOXDIR/temp/cache-backend" --cache-db-path "$NERIBOXDIR/temp/cache-backend" --cache-tmp-upload-path "$NERIBOXDIR/temp" --no-check-certificate $PARM --daemon &
+        $SU nice -n 19 ionice -c 2 -n 7 $RCLONE_PATH mount "AList:"$CLOUDDIR"" "$MOUNTPATH/Cloud/.AList" --config "$RCLONE_CONFIG_PATH" --log-file "$NERIBOXDIR/log.txt" --cache-dir "$NERIBOXDIR/temp" --cache-chunk-path "$NERIBOXDIR/temp/cache-backend" --cache-db-path "$NERIBOXDIR/temp/cache-backend" --cache-tmp-upload-path "$NERIBOXDIR/temp" --no-check-certificate $PARM --daemon &
         elif [ -n "$REMOTE" ];then
-        $SU nice -n 19 ionice -c 2 -n 7 $RCLONE_PATH mount ""$REMOTE":"$CLOUDDIR"" "$NERIBOXDIR/Cloud/$REMOTE" --config "$RCLONE_CONFIG_PATH" --log-file "$NERIBOXDIR/log.txt" --cache-dir "$NERIBOXDIR/temp" --cache-chunk-path "$NERIBOXDIR/temp/cache-backend" --cache-db-path "$NERIBOXDIR/temp/cache-backend" --cache-tmp-upload-path "$NERIBOXDIR/temp" --no-check-certificate $PARM --daemon &
+        $SU nice -n 19 ionice -c 2 -n 7 $RCLONE_PATH mount ""$REMOTE":"$CLOUDDIR"" "$MOUNTPATH/Cloud/$REMOTE" --config "$RCLONE_CONFIG_PATH" --log-file "$NERIBOXDIR/log.txt" --cache-dir "$NERIBOXDIR/temp" --cache-chunk-path "$NERIBOXDIR/temp/cache-backend" --cache-db-path "$NERIBOXDIR/temp/cache-backend" --cache-tmp-upload-path "$NERIBOXDIR/temp" --no-check-certificate $PARM --daemon &
         fi
 
         local MNTDIR="($(find /mnt -maxdepth 4 -name emulated | grep -v pass_through) /storage/emulated)"
@@ -493,9 +509,9 @@ function RCLONE () {
             if [ -e "$i/0" ];then
                 chown media_rw:media_rw "$i/0/$MOUNTDIR"
                 if [ -z "$REMOTE" ];then
-                $SU mount --bind $NERIBOXDIR/Cloud/.AList $i/0/$MOUNTDIR
+                $SU mount --bind $MOUNTPATH/Cloud/.AList $i/0/$MOUNTDIR
                 elif [ -n "$REMOTE" ];then
-                $SU mount --bind $NERIBOXDIR/Cloud/$REMOTE $i/0/$MOUNTDIR
+                $SU mount --bind $MOUNTPATH/Cloud/$REMOTE $i/0/$MOUNTDIR
                 fi
                 if [ -n "$($SU mount | grep /storage/emulated/0/$MOUNTDIR | grep fuse.rclone)" ];then
                     break
@@ -516,9 +532,9 @@ function RCLONE () {
         fi
     done
     if [ -z "$REMOTE" ];then
-        $RCLONE_PATH purge --config "$RCLONE_CONFIG_PATH" $NERIBOXDIR/Cloud/*
+        $RCLONE_PATH purge --config "$RCLONE_CONFIG_PATH" $MOUNTPATH/Cloud/*
     else
-        $RCLONE_PATH purge --config "$RCLONE_CONFIG_PATH" $NERIBOXDIR/Cloud/$REMOTE
+        $RCLONE_PATH purge --config "$RCLONE_CONFIG_PATH" $MOUNTPATH/Cloud/$REMOTE
     fi
     ;;
     CONFIG)
@@ -672,9 +688,6 @@ function PROGRAM_NAME () {
     ARIA2)
     echo Aria2
     ;;
-    LIGHTTPD)
-    echo Lighttpd
-    ;;
     RCLONE)
     echo rclone
     ;;
@@ -693,16 +706,16 @@ function PROGRAM_NAME () {
     esac
     }
     
-function INFORMATION_ECHO () {
-    local ENV=$(set|tr "\n" "*")
-    local ENV=$(echo $ENV | tr "*" "\n" | $BUSYBOX_PATH egrep "^$1_$2=" | awk -F "=" '{print $2}')
-    echo $ENV
-    }
+
 
 function DASHBOARD () {
     local STATUSBAR="$(CONFIG $CONFIG_PATH STATUSBAR)"
     STATUS $STATUSBAR
     LANG
+    function INFORMATION_ECHO () {
+    local VAR=$(echo '${'${1}_${2}'[@]}')
+    eval echo $VAR
+    }
     function INFORMATION_PRINT () {
     while [ $# -gt 0 ]; do
 	case "$1" in
@@ -741,7 +754,7 @@ function DASHBOARD () {
                 ;;
                 WEBUI)
                 if [ "$program" = "ARIA2" ];then
-                INFORMATION="${INFORMATION}|${TEXT_WEBUI}:${WEBUI[@]}"
+                INFORMATION="${INFORMATION}|${TEXT_WEBUI}:${HTTPD_PORT[@]}"
                 fi
                 shift
                 ;;
@@ -881,7 +894,7 @@ function CONSOLE () {
             if [ "$SKIP_COMMAND" = "true" ];then
             SKIP_COMMAND=false
             else
-            if [ "$program" = "ALIST" -o "$program" = "ARIA2" -o "$program" = "LIGHTTPD" -o "$program" = "RCLONE" -o "$program" = "FRPC" -o "$program" = "JQ" -o "$program" = "SQLITE" -o "$program" = "FUSERMOUNT" -o "$program" = "OPENSSL" ];then
+            if [ "$program" = "ALIST" -o "$program" = "ARIA2" -o "$program" = "HTTPD" -o "$program" = "RCLONE" -o "$program" = "FRPC" -o "$program" = "JQ" -o "$program" = "SQLITE" -o "$program" = "FUSERMOUNT" -o "$program" = "OPENSSL" ];then
             ECHO_VERSION $program
             fi
             fi
@@ -901,7 +914,7 @@ function CONSOLE () {
     fi
     while [ $# -gt 0 ];do
     case $1 in
-    alist|aria2|lighttpd|rclone|frpc|jq|sqlite|fusermount|openssl|trackerlist)
+    alist|aria2|rclone|frpc|jq|sqlite|fusermount|openssl|trackerlist)
     if [ "$SKIP_COMMAND" = "true" ];then
     SKIP_COMMAND=false
     shift
